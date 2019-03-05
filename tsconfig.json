@@ -1,9 +1,0 @@
-{
-    "files": [
-        "mocap-viewer.ts",
-    ],
-    "compilerOptions": {
-        "moduleResolution": "Node",
-        "module": "none"
-    }
-}
