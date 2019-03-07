@@ -9,6 +9,19 @@ from PyQt5.QtWidgets import (QApplication, QHBoxLayout, QOpenGLWidget, QSlider, 
 
 import OpenGL.GL as gl
 
+import Hifi.recording
+import Hifi.math
+
+INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
+POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot']
+SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
+            'rotation': ['rx', 'ry', 'rz', 'rw'],
+            'translation': ['px', 'py', 'pz'],
+            'velocity': ['dx', 'dy', 'dz']}
+data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
+
+print(data)
+
 class Window(QWidget):
 
     def __init__(self):
@@ -90,12 +103,32 @@ class GLWidget(QOpenGLWidget):
 
     def paintGL(self):
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        gl.glMatrixMode(gl.GL_MODELVIEW)
         gl.glLoadIdentity()
         gl.glTranslated(0.0, 0.0, -10.0)
         gl.glRotated(self.xRot / 16.0, 1.0, 0.0, 0.0)
         gl.glRotated(self.yRot / 16.0, 0.0, 1.0, 0.0)
         gl.glRotated(self.zRot / 16.0, 0.0, 0.0, 1.0)
         gl.glCallList(self.object)
+
+        frame = 0
+        for key in POSE_NAMES:
+            pos = Hifi.math.Vec3(data[key + "_px"][frame], data[key + "_py"][frame], data[key + "_pz"][frame])
+            rot = Hifi.math.Quat(data[key + "_rx"][frame], data[key + "_ry"][frame], data[key + "_rz"][frame], data[key + "_rw"][frame])
+            xAxis = pos + rot.rotate(Hifi.math.Vec3(0.1, 0.0, 0.0))
+            yAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.1, 0.0))
+            zAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.0, 0.1))
+            gl.glBegin(gl.GL_LINES)
+            gl.glColor4f(1.0, 0.0, 0.0, 1.0)
+            gl.glVertex3d(pos.x, pos.y, pos.z)
+            gl.glVertex3d(xAxis.x, xAxis.y, xAxis.z)
+            gl.glColor4f(0.0, 1.0, 0.0, 1.0)
+            gl.glVertex3d(pos.x, pos.y, pos.z)
+            gl.glVertex3d(yAxis.x, yAxis.y, yAxis.z)
+            gl.glColor4f(0.0, 0.0, 1.0, 1.0)
+            gl.glVertex3d(pos.x, pos.y, pos.z)
+            gl.glVertex3d(zAxis.x, zAxis.y, zAxis.z)
+            gl.glEnd()
 
     def resizeGL(self, width, height):
         side = min(width, height)
