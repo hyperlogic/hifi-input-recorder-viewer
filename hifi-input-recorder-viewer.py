@@ -12,15 +12,34 @@ import OpenGL.GL as gl
 import Hifi.recording
 import Hifi.math
 
+##############################################
+## paste jupyter notebook here
+
 INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
-POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot']
+# INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns3.json.gz"
+POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand']
 SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
             'rotation': ['rx', 'ry', 'rz', 'rw'],
             'translation': ['px', 'py', 'pz'],
             'velocity': ['dx', 'dy', 'dz']}
 frame = 0
 data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
-print(data)
+
+
+if 'sensor_px' in data:
+    print("new recording")
+    # transform data from avatar to sensor space.
+    for pose in POSE_NAMES:
+        print("transforming " + pose + " into sensor space")
+        Hifi.recording.apply_xform(data, 1.0, 'avatar_px', 'avatar_py', 'avatar_pz', 'avatar_rx', 'avatar_ry', 'avatar_rz', 'avatar_rw',
+                                   pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
+        Hifi.recording.apply_xform_inverse(data, 'sensor_s', 'sensor_px', 'sensor_py', 'sensor_pz', 'sensor_rx', 'sensor_ry', 'sensor_rz', 'sensor_rw',
+                                           pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
+else:
+    print("old recording")
+#print(data)
+
+##############################################
 
 def gluPerspective(fovy, aspect, nearVal, farVal):
     f = 1.0 / math.tan(fovy / 2.0)
@@ -65,7 +84,6 @@ def drawPose(name, frame):
             gl.glVertex3d(pos.x, pos.y, pos.z)
         gl.glEnd()
 
-
 def drawFloor(height):
     gridSpacing = 0.2
     numLines = 10
@@ -101,10 +119,12 @@ class GLWidget(QOpenGLWidget):
     def __init__(self, parent=None):
         super(GLWidget, self).__init__(parent)
 
-        self.object = 0
         self.xRot = 0
         self.yRot = 0
         self.zRot = 0
+        self.boomLength = 5
+        self.xOffset = 0
+        self.yOffset = 0
 
         self.lastPos = QPoint()
 
@@ -166,7 +186,7 @@ class GLWidget(QOpenGLWidget):
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         gl.glMatrixMode(gl.GL_MODELVIEW)
         gl.glLoadIdentity()
-        gl.glTranslated(0.0, 0.0, -5.0)
+        gl.glTranslated(self.xOffset, self.yOffset, -self.boomLength)
         gl.glRotated(self.xRot / 16.0, 1.0, 0.0, 0.0)
         gl.glRotated(self.yRot / 16.0, 0.0, 1.0, 0.0)
         gl.glRotated(self.zRot / 16.0, 0.0, 0.0, 1.0)
@@ -202,11 +222,13 @@ class GLWidget(QOpenGLWidget):
         if event.buttons() & Qt.LeftButton:
             self.setXRotation(self.xRot + 8 * dy)
             self.setYRotation(self.yRot + 8 * dx)
-        elif event.buttons() & Qt.RightButton:
-            self.setXRotation(self.xRot + 8 * dy)
-            self.setZRotation(self.zRot + 8 * dx)
-
+        elif event.buttons() & Qt.MiddleButton:
+            self.xOffset = self.xOffset + (0.01 * dx)
+            self.yOffset = self.yOffset - (0.01 * dy)
         self.lastPos = event.pos()
+
+    def wheelEvent(self, event):
+        self.boomLength = self.boomLength - (event.angleDelta().y() / 120.0)
 
     def normalizeAngle(self, angle):
         while angle < 0:
