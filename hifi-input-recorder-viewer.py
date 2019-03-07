@@ -18,9 +18,70 @@ SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
             'rotation': ['rx', 'ry', 'rz', 'rw'],
             'translation': ['px', 'py', 'pz'],
             'velocity': ['dx', 'dy', 'dz']}
+frame = 0
 data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
-
 print(data)
+
+def gluPerspective(fovy, aspect, nearVal, farVal):
+    f = 1.0 / math.tan(fovy / 2.0)
+    a = (farVal + nearVal) / (nearVal - farVal)
+    b = (2 * farVal * nearVal) / (nearVal - farVal)
+    m = [f / aspect, 0, 0, 0,
+         0,          f, 0, 0,
+         0,          0, a, -1,
+         0,          0, b, 0]
+    gl.glLoadMatrixd(m)
+
+def drawPose(name, frame):
+    global data
+
+    DRAW_TRAILS = True
+    TRAIL_LENGTH = 30
+    TRAIL_COLOR = [0.0, 0.5, 0.5, 1.0]
+
+    pos = Hifi.math.Vec3(data[name + "_px"][frame], data[name + "_py"][frame], data[name + "_pz"][frame])
+    rot = Hifi.math.Quat(data[name + "_rx"][frame], data[name + "_ry"][frame], data[name + "_rz"][frame], data[name + "_rw"][frame])
+    xAxis = pos + rot.rotate(Hifi.math.Vec3(0.1, 0.0, 0.0))
+    yAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.1, 0.0))
+    zAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.0, 0.1))
+    gl.glBegin(gl.GL_LINES)
+    gl.glColor4d(1.0, 0.0, 0.0, 1.0)
+    gl.glVertex3d(pos.x, pos.y, pos.z)
+    gl.glVertex3d(xAxis.x, xAxis.y, xAxis.z)
+    gl.glColor4f(0.0, 1.0, 0.0, 1.0)
+    gl.glVertex3d(pos.x, pos.y, pos.z)
+    gl.glVertex3d(yAxis.x, yAxis.y, yAxis.z)
+    gl.glColor4f(0.0, 0.0, 1.0, 1.0)
+    gl.glVertex3d(pos.x, pos.y, pos.z)
+    gl.glVertex3d(zAxis.x, zAxis.y, zAxis.z)
+    gl.glEnd()
+    if DRAW_TRAILS:
+        gl.glBegin(gl.GL_LINE_STRIP)
+        for i in range(TRAIL_LENGTH):
+            frameIndex = max(frame - i, 0)
+            shade = ((TRAIL_LENGTH - i) / TRAIL_LENGTH)
+            pos = Hifi.math.Vec3(data[name + "_px"][frameIndex], data[name + "_py"][frameIndex], data[name + "_pz"][frameIndex])
+            gl.glColor4d(TRAIL_COLOR[0] * shade, TRAIL_COLOR[1] * shade, TRAIL_COLOR[2] * shade, TRAIL_COLOR[3])
+            gl.glVertex3d(pos.x, pos.y, pos.z)
+        gl.glEnd()
+
+
+def drawFloor(height):
+    gridSpacing = 0.2
+    numLines = 10
+    end = (numLines * gridSpacing) / 2.0
+    start = -end
+    gl.glColor4d(0.0, 0.5, 0.0, 0.0)
+    gl.glBegin(gl.GL_LINES)
+
+    # draw grid lines
+    for i in range(numLines + 1):
+        x = start + (i * gridSpacing)
+        gl.glVertex3d(x, 0.0, start);
+        gl.glVertex3d(x, 0.0, end);
+        gl.glVertex3d(start, 0.0, x);
+        gl.glVertex3d(end, 0.0, x);
+    gl.glEnd()
 
 class Window(QWidget):
 
@@ -95,8 +156,8 @@ class GLWidget(QOpenGLWidget):
     def initializeGL(self):
         print(self.getOpenglInfo())
 
-        self.setClearColor(self.trolltechPurple.darker())
-        self.object = self.makeObject()
+        # black
+        self.setClearColor(QColor.fromRgbF(0.0, 0.0, 0.0))
         gl.glShadeModel(gl.GL_FLAT)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glEnable(gl.GL_CULL_FACE)
@@ -105,30 +166,17 @@ class GLWidget(QOpenGLWidget):
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
         gl.glMatrixMode(gl.GL_MODELVIEW)
         gl.glLoadIdentity()
-        gl.glTranslated(0.0, 0.0, -10.0)
+        gl.glTranslated(0.0, 0.0, -5.0)
         gl.glRotated(self.xRot / 16.0, 1.0, 0.0, 0.0)
         gl.glRotated(self.yRot / 16.0, 0.0, 1.0, 0.0)
         gl.glRotated(self.zRot / 16.0, 0.0, 0.0, 1.0)
-        gl.glCallList(self.object)
 
-        frame = 0
-        for key in POSE_NAMES:
-            pos = Hifi.math.Vec3(data[key + "_px"][frame], data[key + "_py"][frame], data[key + "_pz"][frame])
-            rot = Hifi.math.Quat(data[key + "_rx"][frame], data[key + "_ry"][frame], data[key + "_rz"][frame], data[key + "_rw"][frame])
-            xAxis = pos + rot.rotate(Hifi.math.Vec3(0.1, 0.0, 0.0))
-            yAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.1, 0.0))
-            zAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.0, 0.1))
-            gl.glBegin(gl.GL_LINES)
-            gl.glColor4f(1.0, 0.0, 0.0, 1.0)
-            gl.glVertex3d(pos.x, pos.y, pos.z)
-            gl.glVertex3d(xAxis.x, xAxis.y, xAxis.z)
-            gl.glColor4f(0.0, 1.0, 0.0, 1.0)
-            gl.glVertex3d(pos.x, pos.y, pos.z)
-            gl.glVertex3d(yAxis.x, yAxis.y, yAxis.z)
-            gl.glColor4f(0.0, 0.0, 1.0, 1.0)
-            gl.glVertex3d(pos.x, pos.y, pos.z)
-            gl.glVertex3d(zAxis.x, zAxis.y, zAxis.z)
-            gl.glEnd()
+        global frame
+        drawFloor(0.0)
+        for name in POSE_NAMES:
+            drawPose(name, frame)
+        frame = (frame + 1) % len(data)
+        self.update()
 
     def resizeGL(self, width, height):
         side = min(width, height)
@@ -140,7 +188,8 @@ class GLWidget(QOpenGLWidget):
 
         gl.glMatrixMode(gl.GL_PROJECTION)
         gl.glLoadIdentity()
-        gl.glOrtho(-0.5, +0.5, +0.5, -0.5, 4.0, 15.0)
+        #gl.glOrtho(-0.5, +0.5, +0.5, -0.5, 4.0, 15.0)
+        gluPerspective(30.0 * math.pi / 180, 1, 0.01, 100.0)
         gl.glMatrixMode(gl.GL_MODELVIEW)
 
     def mousePressEvent(self, event):
@@ -158,78 +207,6 @@ class GLWidget(QOpenGLWidget):
             self.setZRotation(self.zRot + 8 * dx)
 
         self.lastPos = event.pos()
-
-    def makeObject(self):
-        genList = gl.glGenLists(1)
-        gl.glNewList(genList, gl.GL_COMPILE)
-
-        gl.glBegin(gl.GL_QUADS)
-
-        x1 = +0.06
-        y1 = -0.14
-        x2 = +0.14
-        y2 = -0.06
-        x3 = +0.08
-        y3 = +0.00
-        x4 = +0.30
-        y4 = +0.22
-
-        self.quad(x1, y1, x2, y2, y2, x2, y1, x1)
-        self.quad(x3, y3, x4, y4, y4, x4, y3, x3)
-
-        self.extrude(x1, y1, x2, y2)
-        self.extrude(x2, y2, y2, x2)
-        self.extrude(y2, x2, y1, x1)
-        self.extrude(y1, x1, x1, y1)
-        self.extrude(x3, y3, x4, y4)
-        self.extrude(x4, y4, y4, x4)
-        self.extrude(y4, x4, y3, x3)
-
-        NumSectors = 200
-
-        for i in range(NumSectors):
-            angle1 = (i * 2 * math.pi) / NumSectors
-            x5 = 0.30 * math.sin(angle1)
-            y5 = 0.30 * math.cos(angle1)
-            x6 = 0.20 * math.sin(angle1)
-            y6 = 0.20 * math.cos(angle1)
-
-            angle2 = ((i + 1) * 2 * math.pi) / NumSectors
-            x7 = 0.20 * math.sin(angle2)
-            y7 = 0.20 * math.cos(angle2)
-            x8 = 0.30 * math.sin(angle2)
-            y8 = 0.30 * math.cos(angle2)
-
-            self.quad(x5, y5, x6, y6, x7, y7, x8, y8)
-
-            self.extrude(x6, y6, x7, y7)
-            self.extrude(x8, y8, x5, y5)
-
-        gl.glEnd()
-        gl.glEndList()
-
-        return genList
-
-    def quad(self, x1, y1, x2, y2, x3, y3, x4, y4):
-        self.setColor(self.trolltechGreen)
-
-        gl.glVertex3d(x1, y1, -0.05)
-        gl.glVertex3d(x2, y2, -0.05)
-        gl.glVertex3d(x3, y3, -0.05)
-        gl.glVertex3d(x4, y4, -0.05)
-
-        gl.glVertex3d(x4, y4, +0.05)
-        gl.glVertex3d(x3, y3, +0.05)
-        gl.glVertex3d(x2, y2, +0.05)
-        gl.glVertex3d(x1, y1, +0.05)
-
-    def extrude(self, x1, y1, x2, y2):
-        self.setColor(self.trolltechGreen.darker(250 + int(100 * x1)))
-
-        gl.glVertex3d(x1, y1, +0.05)
-        gl.glVertex3d(x2, y2, +0.05)
-        gl.glVertex3d(x2, y2, -0.05)
-        gl.glVertex3d(x1, y1, -0.05)
 
     def normalizeAngle(self, angle):
         while angle < 0:
