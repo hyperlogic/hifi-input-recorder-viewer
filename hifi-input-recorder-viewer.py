@@ -12,11 +12,17 @@ import OpenGL.GL as gl
 import Hifi.recording
 import Hifi.math
 
+import functools
+import operator
+import pandas
+
+
+
 ##############################################
 ## paste jupyter notebook here
 
-INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
-# INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns3.json.gz"
+# INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
+INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns3.json.gz"
 POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand']
 SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
             'rotation': ['rx', 'ry', 'rz', 'rw'],
@@ -25,6 +31,43 @@ SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
 frame = 0
 data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
 
+def binom(n, k):
+
+    from math import factorial as fac
+
+
+def binom(n, k):
+    try:
+        binom = math.factorial(n) // math.factorial(k) // math.factorial(n - k)
+    except ValueError:
+        binom = 0
+    return binom
+
+def clamp(value, min_value, max_value):
+    return max(min_value, min(max_value, value))
+
+def guassian_filter(array):
+    # binomial coeff
+    # k = [1, 8, 28, 56, 70, 56, 28, 8, 1]
+
+    kk = 14
+    k = [binom(kk, i) for i in range(kk + 1)]
+    print(k)
+    # k = [1, 8, 28, 56, 70, 56, 28, 8, 1]
+    # TODO: figure out formula for this constant, right now it's a guess.
+    kc = 1.0 / (functools.reduce(operator.add, k, 0))
+    new_array = []
+    n = len(array)
+    # hack to simulate latency add extra samples
+    # for i in range(len(k) // 2):
+    #        new_array.append(array[0])
+    for i in range(n):
+        indices = [clamp(i - 4, 0, n - 1), clamp(i - 3, 0, n - 1), clamp(i - 2, 0, n - 1), clamp(i - 1, 0, n - 1), clamp(i, 0, n - 1), clamp(i + 1, 0, n - 1), clamp(i + 2, 0, n - 1), clamp(i + 3, 0, n - 1), clamp(i + 4, 0, n - 1)]
+        accum = 0.0
+        for j in range(len(indices)):
+            accum = accum + kc * k[j] * array[indices[j]]
+        new_array.append(accum)
+    return pandas.Series(new_array)
 
 if 'sensor_px' in data:
     print("new recording")
@@ -37,7 +80,16 @@ if 'sensor_px' in data:
                                            pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
 else:
     print("old recording")
-#print(data)
+
+# filter test.
+data["Hips2_px"] = guassian_filter(data["Hips_px"])
+data["Hips2_py"] = guassian_filter(data["Hips_py"])
+data["Hips2_pz"] = guassian_filter(data["Hips_pz"])
+data["Hips2_rx"] = data["Hips_rx"]
+data["Hips2_ry"] = data["Hips_ry"]
+data["Hips2_rz"] = data["Hips_rz"]
+data["Hips2_rw"] = data["Hips_rw"]
+POSE_NAMES.append("Hips2")
 
 ##############################################
 
