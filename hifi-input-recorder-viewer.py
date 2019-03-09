@@ -31,43 +31,35 @@ SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
 frame = 0
 data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
 
-def binom(n, k):
+import scipy.signal
 
-    from math import factorial as fac
+def butter_lowpass(cutoff, fs, order=5):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = scipy.signal.butter(order, normal_cutoff, btype='low', analog=False)
+    return b, a
 
+def butter_lowpass_filter(data, cutoff, fs, order):
+    b, a = butter_lowpass(cutoff, fs, order=order)
 
-def binom(n, k):
-    try:
-        binom = math.factorial(n) // math.factorial(k) // math.factorial(n - k)
-    except ValueError:
-        binom = 0
-    return binom
+    # compute group delay of filter
+    w, gd = scipy.signal.group_delay((b, a))
 
-def clamp(value, min_value, max_value):
-    return max(min_value, min(max_value, value))
+    # shift data by maximum group delay, canceling out the delay
+    fudge_factor = 0.75
+    shift_amount = int(gd.max() * fudge_factor)  # in samples
+    data = data.shift(-shift_amount)
 
-def guassian_filter(array):
-    # binomial coeff
-    # k = [1, 8, 28, 56, 70, 56, 28, 8, 1]
+    # filter the shifted data
+    y = scipy.signal.lfilter(b, a, data)
+    return y
 
-    kk = 14
-    k = [binom(kk, i) for i in range(kk + 1)]
-    print(k)
-    # k = [1, 8, 28, 56, 70, 56, 28, 8, 1]
-    # TODO: figure out formula for this constant, right now it's a guess.
-    kc = 1.0 / (functools.reduce(operator.add, k, 0))
-    new_array = []
-    n = len(array)
-    # hack to simulate latency add extra samples
-    # for i in range(len(k) // 2):
-    #        new_array.append(array[0])
-    for i in range(n):
-        indices = [clamp(i - 4, 0, n - 1), clamp(i - 3, 0, n - 1), clamp(i - 2, 0, n - 1), clamp(i - 1, 0, n - 1), clamp(i, 0, n - 1), clamp(i + 1, 0, n - 1), clamp(i + 2, 0, n - 1), clamp(i + 3, 0, n - 1), clamp(i + 4, 0, n - 1)]
-        accum = 0.0
-        for j in range(len(indices)):
-            accum = accum + kc * k[j] * array[indices[j]]
-        new_array.append(accum)
-    return pandas.Series(new_array)
+def lowpass_filter(array):
+    # Filter requirements.
+    order = 3
+    fs = 90.0       # sample rate, Hz
+    cutoff = 0.5  # desired cutoff frequency of the filter, Hz
+    return butter_lowpass_filter(array, cutoff, fs, order)
 
 if 'sensor_px' in data:
     print("new recording")
@@ -82,9 +74,9 @@ else:
     print("old recording")
 
 # filter test.
-data["Hips2_px"] = guassian_filter(data["Hips_px"])
-data["Hips2_py"] = guassian_filter(data["Hips_py"])
-data["Hips2_pz"] = guassian_filter(data["Hips_pz"])
+data["Hips2_px"] = lowpass_filter(data["Hips_px"])
+data["Hips2_py"] = lowpass_filter(data["Hips_py"])
+data["Hips2_pz"] = lowpass_filter(data["Hips_pz"])
 data["Hips2_rx"] = data["Hips_rx"]
 data["Hips2_ry"] = data["Hips_ry"]
 data["Hips2_rz"] = data["Hips_rz"]
