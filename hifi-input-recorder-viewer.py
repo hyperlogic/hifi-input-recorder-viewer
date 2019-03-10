@@ -23,6 +23,7 @@ import pandas
 
 # INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
 INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns3.json.gz"
+# INPUT_RECORDING_FILENAME = "motion-matching/microsteps-no-turns.json.gz"
 POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand']
 SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
             'rotation': ['rx', 'ry', 'rz', 'rw'],
@@ -73,15 +74,42 @@ if 'sensor_px' in data:
 else:
     print("old recording")
 
-# filter test.
-data["Hips2_px"] = lowpass_filter(data["Hips_px"])
-data["Hips2_py"] = lowpass_filter(data["Hips_py"])
-data["Hips2_pz"] = lowpass_filter(data["Hips_pz"])
-data["Hips2_rx"] = data["Hips_rx"]
-data["Hips2_ry"] = data["Hips_ry"]
-data["Hips2_rz"] = data["Hips_rz"]
-data["Hips2_rw"] = data["Hips_rw"]
-POSE_NAMES.append("Hips2")
+# compute motion of root by filtering the motion of the hips.
+root_y = data["Hips_py"].mean()
+num_samples = len(data["Hips_py"])
+data["Root_px"] = lowpass_filter(data["Hips_px"])
+data["Root_py"] = pandas.Series([root_y for i in range(num_samples)])
+data["Root_pz"] = lowpass_filter(data["Hips_pz"])
+
+thetas = []
+z_axis = Hifi.math.Vec3(0, 0, 1)
+y_axis = Hifi.math.Vec3(0, 1, 0)
+for i in range(num_samples):
+    rot = Hifi.math.Quat(data["Hips_rx"][i], data["Hips_ry"][i], data["Hips_rz"][i], data["Hips_rw"][i])
+    forward = rot.rotate(z_axis)
+    new_theta = math.atan2(forward.x, forward.z)
+
+    if i > 0:
+        prev_theta = thetas[i - 1]
+    else:
+        prev_theta = math.atan2(forward.x, forward.z)
+
+    # shift theta so that it is less then 180 degrees from the previous theta
+    # this is to prevent discontinuities and keep rotations smooth.
+    while (new_theta - prev_theta) > math.pi:
+        new_theta = new_theta - (2.0 * math.pi)
+    while (new_theta - prev_theta) < -math.pi:
+        new_theta = new_theta + (2.0 * math.pi)
+    thetas.append(new_theta)
+
+filtered_thetas = lowpass_filter(pandas.Series(thetas))
+rot_quats = [Hifi.math.Quat.fromAngleAxis(theta, y_axis) for theta in filtered_thetas]
+
+data["Root_rx"] = pandas.Series([q.x for q in rot_quats])
+data["Root_ry"] = pandas.Series([q.y for q in rot_quats])
+data["Root_rz"] = pandas.Series([q.z for q in rot_quats])
+data["Root_rw"] = pandas.Series([q.w for q in rot_quats])
+POSE_NAMES.append("Root")
 
 ##############################################
 
