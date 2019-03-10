@@ -33,6 +33,12 @@ class Vec3:
 
 
 class Quat:
+    @staticmethod
+    def fromAngleAxis(angle, axis):
+        n = axis.normalize() * math.sin(angle / 2.0)
+        w = math.cos(angle / 2.0)
+        return Quat(n.x, n.y, n.z, w);
+
     def __init__(self, x, y, z, w):
         self.x = x
         self.y = y
