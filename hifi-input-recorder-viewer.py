@@ -29,7 +29,8 @@ SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
             'rotation': ['rx', 'ry', 'rz', 'rw'],
             'translation': ['px', 'py', 'pz'],
             'velocity': ['dx', 'dy', 'dz']}
-frame = 0
+
+print("Loading recording", INPUT_RECORDING_FILENAME)
 data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
 
 import scipy.signal
@@ -41,29 +42,33 @@ def butter_lowpass(cutoff, fs, order=5):
     return b, a
 
 def butter_lowpass_filter(data, cutoff, fs, order):
+
+    # create filter
     b, a = butter_lowpass(cutoff, fs, order=order)
 
     # compute group delay of filter
     w, gd = scipy.signal.group_delay((b, a))
 
-    # shift data by maximum group delay, canceling out the delay
+    # pad begining of data with extra copy of the first sample, to smooth out the beginning of the data
+    # this is necessary for the filtering
+    intro_padding_count = 180
+    fill_value = data[0]
+    data = data.shift(intro_padding_count)
+
+    # fill padding with fill_value (I don't understand why pandas.Series.shift fill_value parameter, does not work.)
+    for i in range(intro_padding_count):
+        data[i] = fill_value
+
+    y = scipy.signal.lfilter(b, a, data)
+
+    # unshift the intro_padding out after filtering
+    # but also account for the group delay
     fudge_factor = 0.75
     shift_amount = int(gd.max() * fudge_factor)  # in samples
-    data = data.shift(-shift_amount)
-
-    # filter the shifted data
-    y = scipy.signal.lfilter(b, a, data)
-    return y
-
-def lowpass_filter(array):
-    # Filter requirements.
-    order = 3
-    fs = 90.0       # sample rate, Hz
-    cutoff = 0.5  # desired cutoff frequency of the filter, Hz
-    return butter_lowpass_filter(array, cutoff, fs, order)
+    result = pandas.Series(y)
+    return result.shift(-(shift_amount + intro_padding_count))
 
 if 'sensor_px' in data:
-    print("new recording")
     # transform data from avatar to sensor space.
     for pose in POSE_NAMES:
         print("transforming " + pose + " into sensor space")
@@ -72,14 +77,19 @@ if 'sensor_px' in data:
         Hifi.recording.apply_xform_inverse(data, 'sensor_s', 'sensor_px', 'sensor_py', 'sensor_pz', 'sensor_rx', 'sensor_ry', 'sensor_rz', 'sensor_rw',
                                            pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
 else:
-    print("old recording")
+    print("Recording is in avatar space")
+
+# Filter requirements.
+filter_order = 3
+filter_fs = 90.0       # sample rate, Hz
+filter_cutoff = 0.5  # desired cutoff frequency of the filter, Hz
 
 # compute motion of root by filtering the motion of the hips.
 root_y = data["Hips_py"].mean()
 num_samples = len(data["Hips_py"])
-data["Root_px"] = lowpass_filter(data["Hips_px"])
+data["Root_px"] = butter_lowpass_filter(data["Hips_px"], filter_cutoff, filter_fs, filter_order)
 data["Root_py"] = pandas.Series([root_y for i in range(num_samples)])
-data["Root_pz"] = lowpass_filter(data["Hips_pz"])
+data["Root_pz"] = butter_lowpass_filter(data["Hips_pz"], filter_cutoff, filter_fs, filter_order)
 
 thetas = []
 z_axis = Hifi.math.Vec3(0, 0, 1)
@@ -102,7 +112,7 @@ for i in range(num_samples):
         new_theta = new_theta + (2.0 * math.pi)
     thetas.append(new_theta)
 
-filtered_thetas = lowpass_filter(pandas.Series(thetas))
+filtered_thetas = butter_lowpass_filter(pandas.Series(thetas), filter_cutoff, filter_fs, filter_order)
 rot_quats = [Hifi.math.Quat.fromAngleAxis(theta, y_axis) for theta in filtered_thetas]
 
 data["Root_rx"] = pandas.Series([q.x for q in rot_quats])
@@ -127,7 +137,7 @@ def drawPose(name, frame):
     global data
 
     DRAW_TRAILS = True
-    TRAIL_LENGTH = 30
+    TRAIL_LENGTH = 45
     TRAIL_COLOR = [0.0, 0.5, 0.5, 1.0]
 
     pos = Hifi.math.Vec3(data[name + "_px"][frame], data[name + "_py"][frame], data[name + "_pz"][frame])
@@ -183,6 +193,10 @@ class Window(QWidget):
         self.setLayout(mainLayout)
         self.setWindowTitle("Hifi Input Recorder Viewer")
 
+    def keyPressEvent(self, event):
+        self.glWidget.keyPressEvent(event)
+
+
 class GLWidget(QOpenGLWidget):
     xRotationChanged = pyqtSignal(int)
     yRotationChanged = pyqtSignal(int)
@@ -197,6 +211,8 @@ class GLWidget(QOpenGLWidget):
         self.boomLength = 5
         self.xOffset = 0
         self.yOffset = 0
+        self.frame = 0
+        self.paused = False
 
         self.lastPos = QPoint()
 
@@ -222,7 +238,7 @@ class GLWidget(QOpenGLWidget):
         return QSize(50, 50)
 
     def sizeHint(self):
-        return QSize(400, 400)
+        return QSize(800, 800)
 
     def setXRotation(self, angle):
         angle = self.normalizeAngle(angle)
@@ -246,13 +262,17 @@ class GLWidget(QOpenGLWidget):
             self.update()
 
     def initializeGL(self):
-        print(self.getOpenglInfo())
-
         # black
         self.setClearColor(QColor.fromRgbF(0.0, 0.0, 0.0))
         gl.glShadeModel(gl.GL_FLAT)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glEnable(gl.GL_CULL_FACE)
+
+    def incrementFrame(self):
+        self.frame = (self.frame + 1) % len(data)
+
+    def decrementFrame(self):
+        self.frame = (self.frame - 1) % len(data)
 
     def paintGL(self):
         gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
@@ -263,11 +283,13 @@ class GLWidget(QOpenGLWidget):
         gl.glRotated(self.yRot / 16.0, 0.0, 1.0, 0.0)
         gl.glRotated(self.zRot / 16.0, 0.0, 0.0, 1.0)
 
-        global frame
         drawFloor(0.0)
         for name in POSE_NAMES:
-            drawPose(name, frame)
-        frame = (frame + 1) % len(data)
+            drawPose(name, self.frame)
+
+        if not self.paused:
+            self.incrementFrame()
+
         self.update()
 
     def resizeGL(self, width, height):
@@ -301,6 +323,18 @@ class GLWidget(QOpenGLWidget):
 
     def wheelEvent(self, event):
         self.boomLength = self.boomLength - (event.angleDelta().y() / 120.0)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Return:
+            # restart
+            self.frame = 0
+        elif event.key() == Qt.Key_Space:
+            # toggle pause
+            self.paused = not self.paused
+        elif self.paused and event.key() == Qt.Key_Period:
+            self.incrementFrame()
+        elif self.paused and event.key() == Qt.Key_Comma:
+            self.decrementFrame()
 
     def normalizeAngle(self, angle):
         while angle < 0:
