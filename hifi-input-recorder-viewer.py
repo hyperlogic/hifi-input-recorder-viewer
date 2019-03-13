@@ -15,6 +15,7 @@ import Hifi.math
 import functools
 import operator
 import pandas
+import numpy
 
 ##############################################
 ## paste jupyter notebook here
@@ -22,14 +23,22 @@ import pandas
 import scipy.signal
 import json
 
-GENERATE_OUTPUT = False
+GENERATE_OUTPUT = True
+NAN_CHECK = True
+
+def nan_check(data):
+    if NAN_CHECK:
+        for key in data.keys():
+            if data[key].isnull().values.any():
+                print("WARNING: data['{}'] has {} NaNs it!".format(key, data[key].isnull().sum()))
 
 def dump_data(keys, data):
-    array = []
+    newData = pandas.DataFrame()
     for key in keys:
-        array.append(data[key].tolist())
+        newData[key] = data[key]
+
     with open('data.json', 'w') as outfile:
-        json.dump(array, outfile, indent = 4)
+        json.dump(newData.values.tolist(), outfile, indent = 4)
 
 def butter_lowpass(cutoff, fs, order=5):
     nyq = 0.5 * fs
@@ -45,25 +54,24 @@ def butter_lowpass_filter(data, cutoff, fs, order):
     # compute group delay of filter
     w, gd = scipy.signal.group_delay((b, a))
 
-    # pad begining of data with extra copy of the first sample, to smooth out the beginning of the data
-    # this is necessary for the filtering
-    intro_padding_count = 180
-    fill_value = data[0]
-    data = data.shift(intro_padding_count)
+    # pad both ends of data
+    # this is necessary for the filtering to be smooth
+    padding_count = 180
+    intro_padding = pandas.Series(data[0], index=numpy.arange(padding_count))
+    outro_padding = pandas.Series(data[len(data) - 1], index=numpy.arange(padding_count))
+    padded_data = intro_padding.append(data, ignore_index = True).append(outro_padding, ignore_index = True)
 
-    # fill padding with fill_value (I don't understand why pandas.Series.shift fill_value parameter, does not work.)
-    for i in range(intro_padding_count):
-        data[i] = fill_value
+    y = scipy.signal.lfilter(b, a, padded_data)
+    result = pandas.Series(y)
 
-    y = scipy.signal.lfilter(b, a, data)
-
-    # unshift the intro_padding out after filtering
-    # but also account for the group delay
+    # compute latency introduced by the filter
     fudge_factor = 0.75
     shift_amount = int(gd.max() * fudge_factor)  # in samples
-    result = pandas.Series(y)
-    return result.shift(-(shift_amount + intro_padding_count))
 
+    # clip out padding and cancel out filter latency by shifting data
+    clipped_result = result[(padding_count + shift_amount):-(padding_count - shift_amount)]
+    clipped_result.index = numpy.arange(len(clipped_result))
+    return clipped_result
 
 # INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
 
@@ -87,6 +95,8 @@ SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
 print("Loading recording", INPUT_RECORDING_FILENAME)
 data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
 
+nan_check(data)
+
 #
 # Transform all poses into sensor space, if possible
 #
@@ -99,6 +109,7 @@ if 'sensor_px' in data:
                                    pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
         Hifi.recording.apply_xform_inverse(data, 'sensor_s', 'sensor_px', 'sensor_py', 'sensor_pz', 'sensor_rx', 'sensor_ry', 'sensor_rz', 'sensor_rw',
                                            pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
+        nan_check(data)
 else:
     print("Recording is in avatar space")
 
@@ -113,6 +124,8 @@ filter_cutoff = 0.5  # desired cutoff frequency of the filter, Hz
 #
 # compute motion of root by filtering the motion of the hips.
 #
+
+print("Filtering hips to generate root motion")
 
 root_y = data["Hips_py"].mean()
 num_samples = len(data["Hips_py"])
@@ -154,12 +167,14 @@ data["Root_rz"] = pandas.Series([q.z for q in rot_quats])
 data["Root_rw"] = pandas.Series([q.w for q in rot_quats])
 POSE_NAMES.append("Root")
 
+nan_check(data)
+
 #
 # compute trajectories of root motion
 #
 
 num_trajectory_points = 4
-trajectory_point_spacing = 30
+trajectory_frames = [18, 36, 62, 90]
 def timeShift(series, offset):
     num_samples = len(series)
     return [series[max(0, min(num_samples - 1, i + offset))] for i in range(num_samples)]
@@ -167,24 +182,20 @@ def timeShift(series, offset):
 # generate forward trajectories
 suffixes = ["_px", "_py", "_pz", "_rx", "_ry", "_rz", "_rw"]
 
-for suffix in suffixes:
-    data["RootF1" + suffix] = timeShift(data["Root" + suffix], trajectory_point_spacing)
-POSE_NAMES.append("RootF1")
-
-for suffix in suffixes:
-    data["RootF2" + suffix] = timeShift(data["Root" + suffix], 2 * trajectory_point_spacing)
-POSE_NAMES.append("RootF2")
-
-for suffix in suffixes:
-    data["RootF3" + suffix] = timeShift(data["Root" + suffix], 3 * trajectory_point_spacing)
-POSE_NAMES.append("RootF3")
+for i in range(num_trajectory_points):
+    for suffix in suffixes:
+        data["RootF{}{}".format(i + 1, suffix)] = timeShift(data["Root{}".format(suffix)], trajectory_frames[i])
+    POSE_NAMES.append("RootF{}".format(i + 1))
 
 #
 # Transform everything back into Root relative space
 #
 
 if GENERATE_OUTPUT:
-    output_poses = ['Hips', 'LeftFoot', 'RightFoot', 'RootF1', 'RootF2', 'RootF3']
+    output_poses = ['Hips', 'LeftFoot', 'RightFoot', 'Head', 'LeftHand', 'RightHand']
+    for i in range(num_trajectory_points):
+        output_poses.append("RootF{}".format(i + 1))
+
     for pose in output_poses:
         print("transforming " + pose + " into Root relative space")
 
@@ -192,13 +203,30 @@ if GENERATE_OUTPUT:
                                            pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
 
     # keep only the keys we care about.
-    output_keys = ['Hips_px', 'Hips_py', 'Hips_pz', 'Hips_rx', 'Hips_ry', 'Hips_rz', 'Hips_rw',
+    output_keys = ['id', 'Hips_px', 'Hips_py', 'Hips_pz', 'Hips_rx', 'Hips_ry', 'Hips_rz', 'Hips_rw',
                    'LeftFoot_px', 'LeftFoot_py', 'LeftFoot_pz', 'LeftFoot_rx', 'LeftFoot_ry', 'LeftFoot_rz', 'LeftFoot_rw',
                    'RightFoot_px', 'RightFoot_py', 'RightFoot_pz', 'RightFoot_rx', 'RightFoot_ry', 'RightFoot_rz', 'RightFoot_rw',
-                   'RootF1_px', 'RootF1_py', 'RootF1_pz', 'RootF1_rx', 'RootF1_ry', 'RootF1_rz', 'RootF1_rw',
-                   'RootF2_px', 'RootF2_py', 'RootF2_pz', 'RootF2_rx', 'RootF2_ry', 'RootF2_rz', 'RootF2_rw',
-                   'RootF3_px', 'RootF3_py', 'RootF3_pz', 'RootF3_rx', 'RootF3_ry', 'RootF3_rz', 'RootF3_rw']
+                   'Head_px', 'Head_py', 'Head_pz', 'Head_rx', 'Head_ry', 'Head_rz', 'Head_rw',
+                   'LeftHand_px', 'LeftHand_py', 'LeftHand_pz', 'LeftHand_rx', 'LeftHand_ry', 'LeftHand_rz', 'LeftHand_rw',
+                   'RightHand_px', 'RightHand_py', 'RightHand_pz', 'RightHand_rx', 'RightHand_ry', 'RightHand_rz', 'RightHand_rw']
+    for i in range(num_trajectory_points):
+        output_keys.append("RootF{}_px".format(i + 1))
+        output_keys.append("RootF{}_py".format(i + 1))
+        output_keys.append("RootF{}_pz".format(i + 1))
+
     dump_data(output_keys, data)
+
+    # print c++ enum
+    print("enum RowIndices {")
+    for i in range(len(output_keys)):
+        key = output_keys[i]
+        if i == 0:
+            print("    {}_INDEX = 0,".format(key.upper()))
+        elif i == len(output_keys) - 1:
+            print("    {}_INDEX".format(key.upper()))
+        else:
+            print("    {}_INDEX,".format(key.upper()))
+    print("};")
 
 
 ##############################################
