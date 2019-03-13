@@ -16,24 +16,20 @@ import functools
 import operator
 import pandas
 
-
-
 ##############################################
 ## paste jupyter notebook here
 
-# INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
-INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns3.json.gz"
-# INPUT_RECORDING_FILENAME = "motion-matching/microsteps-no-turns.json.gz"
-POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand']
-SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
-            'rotation': ['rx', 'ry', 'rz', 'rw'],
-            'translation': ['px', 'py', 'pz'],
-            'velocity': ['dx', 'dy', 'dz']}
-
-print("Loading recording", INPUT_RECORDING_FILENAME)
-data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
-
 import scipy.signal
+import json
+
+GENERATE_OUTPUT = False
+
+def dump_data(keys, data):
+    array = []
+    for key in keys:
+        array.append(data[key].tolist())
+    with open('data.json', 'w') as outfile:
+        json.dump(array, outfile, indent = 4)
 
 def butter_lowpass(cutoff, fs, order=5):
     nyq = 0.5 * fs
@@ -68,6 +64,33 @@ def butter_lowpass_filter(data, cutoff, fs, order):
     result = pandas.Series(y)
     return result.shift(-(shift_amount + intro_padding_count))
 
+
+# INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
+
+# perhaps needs lower filter cuttoff, root motion is very sinusoidal
+# INPUT_RECORDING_FILENAME = "motion-matching/microsteps-no-turns.json.gz"
+
+# INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns1.json.gz"
+
+# back and forth
+# INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns2.json.gz"
+
+# circles
+INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns3.json.gz"
+
+POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand']
+SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
+            'rotation': ['rx', 'ry', 'rz', 'rw'],
+            'translation': ['px', 'py', 'pz'],
+            'velocity': ['dx', 'dy', 'dz']}
+
+print("Loading recording", INPUT_RECORDING_FILENAME)
+data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
+
+#
+# Transform all poses into sensor space, if possible
+#
+
 if 'sensor_px' in data:
     # transform data from avatar to sensor space.
     for pose in POSE_NAMES:
@@ -79,17 +102,27 @@ if 'sensor_px' in data:
 else:
     print("Recording is in avatar space")
 
-# Filter requirements.
+#
+# Filter settings
+#
+
 filter_order = 3
 filter_fs = 90.0       # sample rate, Hz
 filter_cutoff = 0.5  # desired cutoff frequency of the filter, Hz
 
+#
 # compute motion of root by filtering the motion of the hips.
+#
+
 root_y = data["Hips_py"].mean()
 num_samples = len(data["Hips_py"])
 data["Root_px"] = butter_lowpass_filter(data["Hips_px"], filter_cutoff, filter_fs, filter_order)
 data["Root_py"] = pandas.Series([root_y for i in range(num_samples)])
 data["Root_pz"] = butter_lowpass_filter(data["Hips_pz"], filter_cutoff, filter_fs, filter_order)
+
+#
+# compute rotation of root by filtering rotation of the hips
+#
 
 thetas = []
 z_axis = Hifi.math.Vec3(0, 0, 1)
@@ -120,6 +153,53 @@ data["Root_ry"] = pandas.Series([q.y for q in rot_quats])
 data["Root_rz"] = pandas.Series([q.z for q in rot_quats])
 data["Root_rw"] = pandas.Series([q.w for q in rot_quats])
 POSE_NAMES.append("Root")
+
+#
+# compute trajectories of root motion
+#
+
+num_trajectory_points = 4
+trajectory_point_spacing = 30
+def timeShift(series, offset):
+    num_samples = len(series)
+    return [series[max(0, min(num_samples - 1, i + offset))] for i in range(num_samples)]
+
+# generate forward trajectories
+suffixes = ["_px", "_py", "_pz", "_rx", "_ry", "_rz", "_rw"]
+
+for suffix in suffixes:
+    data["RootF1" + suffix] = timeShift(data["Root" + suffix], trajectory_point_spacing)
+POSE_NAMES.append("RootF1")
+
+for suffix in suffixes:
+    data["RootF2" + suffix] = timeShift(data["Root" + suffix], 2 * trajectory_point_spacing)
+POSE_NAMES.append("RootF2")
+
+for suffix in suffixes:
+    data["RootF3" + suffix] = timeShift(data["Root" + suffix], 3 * trajectory_point_spacing)
+POSE_NAMES.append("RootF3")
+
+#
+# Transform everything back into Root relative space
+#
+
+if GENERATE_OUTPUT:
+    output_poses = ['Hips', 'LeftFoot', 'RightFoot', 'RootF1', 'RootF2', 'RootF3']
+    for pose in output_poses:
+        print("transforming " + pose + " into Root relative space")
+
+        Hifi.recording.apply_xform_inverse(data, 1.0, 'Root_px', 'Root_py', 'Root_pz', 'Root_rx', 'Root_ry', 'Root_rz', 'Root_rw',
+                                           pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
+
+    # keep only the keys we care about.
+    output_keys = ['Hips_px', 'Hips_py', 'Hips_pz', 'Hips_rx', 'Hips_ry', 'Hips_rz', 'Hips_rw',
+                   'LeftFoot_px', 'LeftFoot_py', 'LeftFoot_pz', 'LeftFoot_rx', 'LeftFoot_ry', 'LeftFoot_rz', 'LeftFoot_rw',
+                   'RightFoot_px', 'RightFoot_py', 'RightFoot_pz', 'RightFoot_rx', 'RightFoot_ry', 'RightFoot_rz', 'RightFoot_rw',
+                   'RootF1_px', 'RootF1_py', 'RootF1_pz', 'RootF1_rx', 'RootF1_ry', 'RootF1_rz', 'RootF1_rw',
+                   'RootF2_px', 'RootF2_py', 'RootF2_pz', 'RootF2_rx', 'RootF2_ry', 'RootF2_rz', 'RootF2_rw',
+                   'RootF3_px', 'RootF3_py', 'RootF3_pz', 'RootF3_rx', 'RootF3_ry', 'RootF3_rz', 'RootF3_rw']
+    dump_data(output_keys, data)
+
 
 ##############################################
 
