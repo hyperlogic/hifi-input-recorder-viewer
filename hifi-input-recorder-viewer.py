@@ -73,14 +73,24 @@ def butter_lowpass_filter(data, cutoff, fs, order):
     clipped_result.index = numpy.arange(len(clipped_result))
     return clipped_result
 
+#
+# Filter settings
+#
+
+filter_order = 3
+filter_fs = 90.0       # sample rate, Hz
+filter_cutoff = 0.5  # desired cutoff frequency of the filter, Hz
+
 # INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
 
 # perhaps needs lower filter cuttoff, root motion is very sinusoidal
 # INPUT_RECORDING_FILENAME = "motion-matching/microsteps-no-turns.json.gz"
 
+# faster walking? also sinuoidal
 # INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns1.json.gz"
+# filter_cuttof = 0.1
 
-# back and forth
+# back and forth only?
 # INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns2.json.gz"
 
 # circles
@@ -112,14 +122,6 @@ if 'sensor_px' in data:
         nan_check(data)
 else:
     print("Recording is in avatar space")
-
-#
-# Filter settings
-#
-
-filter_order = 3
-filter_fs = 90.0       # sample rate, Hz
-filter_cutoff = 0.5  # desired cutoff frequency of the filter, Hz
 
 #
 # compute motion of root by filtering the motion of the hips.
@@ -222,12 +224,11 @@ if GENERATE_OUTPUT:
         key = output_keys[i]
         if i == 0:
             print("    {}_INDEX = 0,".format(key.upper()))
-        elif i == len(output_keys) - 1:
-            print("    {}_INDEX".format(key.upper()))
         else:
             print("    {}_INDEX,".format(key.upper()))
-    print("};")
 
+    print("    DATA_ROW_SIZE")
+    print("};")
 
 ##############################################
 
