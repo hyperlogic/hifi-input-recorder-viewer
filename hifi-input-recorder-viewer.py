@@ -2,6 +2,8 @@
 
 import sys
 import math
+import numpy
+import pandas
 
 from PyQt5.QtCore import pyqtSignal, QPoint, QSize, Qt
 from PyQt5.QtGui import QColor
@@ -10,199 +12,39 @@ from PyQt5.QtWidgets import (QApplication, QHBoxLayout, QOpenGLWidget, QSlider, 
 import OpenGL.GL as gl
 
 import Hifi.recording
-import Hifi.math
-
-import functools
-import operator
-import pandas
-import numpy
+import Hifi.vecmath
 
 ##############################################
 ## paste jupyter notebook here
 
-import scipy.signal
-import json
+GENERATE_OUTPUT = False
 
-GENERATE_OUTPUT = True
-NAN_CHECK = True
+trajectory_frames = [18, 36, 62, 90, -18, -36, -62, -90]
+num_trajectory_points = len(trajectory_frames)
 
-def nan_check(data):
-    if NAN_CHECK:
-        for key in data.keys():
-            if data[key].isnull().values.any():
-                print("WARNING: data['{}'] has {} NaNs it!".format(key, data[key].isnull().sum()))
-
-def dump_data(keys, data):
-    newData = pandas.DataFrame()
-    for key in keys:
-        newData[key] = data[key]
-
-    with open('data.json', 'w') as outfile:
-        json.dump(newData.values.tolist(), outfile, indent = 4)
-
-def butter_lowpass(cutoff, fs, order=5):
-    nyq = 0.5 * fs
-    normal_cutoff = cutoff / nyq
-    b, a = scipy.signal.butter(order, normal_cutoff, btype='low', analog=False)
-    return b, a
-
-def butter_lowpass_filter(data, cutoff, fs, order):
-
-    # create filter
-    b, a = butter_lowpass(cutoff, fs, order=order)
-
-    # compute group delay of filter
-    w, gd = scipy.signal.group_delay((b, a))
-
-    # pad both ends of data
-    # this is necessary for the filtering to be smooth
-    padding_count = 180
-    intro_padding = pandas.Series(data[0], index=numpy.arange(padding_count))
-    outro_padding = pandas.Series(data[len(data) - 1], index=numpy.arange(padding_count))
-    padded_data = intro_padding.append(data, ignore_index = True).append(outro_padding, ignore_index = True)
-
-    y = scipy.signal.lfilter(b, a, padded_data)
-    result = pandas.Series(y)
-
-    # compute latency introduced by the filter
-    fudge_factor = 0.75
-    shift_amount = int(gd.max() * fudge_factor)  # in samples
-
-    # clip out padding and cancel out filter latency by shifting data
-    clipped_result = result[(padding_count + shift_amount):-(padding_count - shift_amount)]
-    clipped_result.index = numpy.arange(len(clipped_result))
-    return clipped_result
-
-#
-# Filter settings
-#
-
-filter_order = 3
-filter_fs = 90.0       # sample rate, Hz
-filter_cutoff = 0.5  # desired cutoff frequency of the filter, Hz
-
-# INPUT_RECORDING_FILENAME = "53_Matthew_Rockettes-Kick.gz"
-
-# perhaps needs lower filter cuttoff, root motion is very sinusoidal
-# INPUT_RECORDING_FILENAME = "motion-matching/microsteps-no-turns.json.gz"
-
-# faster walking? also sinuoidal
-# INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns1.json.gz"
-# filter_cuttof = 0.1
-
-# back and forth only?
-# INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns2.json.gz"
-
-# circles
-INPUT_RECORDING_FILENAME = "motion-matching/matthew-stepping-no-turns3.json.gz"
-
-POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand']
-SUB_KEYS = {'angularVelocity': ['wx', 'wy', 'wz'],
-            'rotation': ['rx', 'ry', 'rz', 'rw'],
-            'translation': ['px', 'py', 'pz'],
-            'velocity': ['dx', 'dy', 'dz']}
-
-print("Loading recording", INPUT_RECORDING_FILENAME)
-data = Hifi.recording.load(INPUT_RECORDING_FILENAME, POSE_NAMES, SUB_KEYS)
-
-nan_check(data)
-
-#
-# Transform all poses into sensor space, if possible
-#
-
-if 'sensor_px' in data:
-    # transform data from avatar to sensor space.
-    for pose in POSE_NAMES:
-        print("transforming " + pose + " into sensor space")
-        Hifi.recording.apply_xform(data, 1.0, 'avatar_px', 'avatar_py', 'avatar_pz', 'avatar_rx', 'avatar_ry', 'avatar_rz', 'avatar_rw',
-                                   pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
-        Hifi.recording.apply_xform_inverse(data, 'sensor_s', 'sensor_px', 'sensor_py', 'sensor_pz', 'sensor_rx', 'sensor_ry', 'sensor_rz', 'sensor_rw',
-                                           pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
-        nan_check(data)
-else:
-    print("Recording is in avatar space")
-
-#
-# compute motion of root by filtering the motion of the hips.
-#
-
-print("Filtering hips to generate root motion")
-
-root_y = data["Hips_py"].mean()
-num_samples = len(data["Hips_py"])
-data["Root_px"] = butter_lowpass_filter(data["Hips_px"], filter_cutoff, filter_fs, filter_order)
-data["Root_py"] = pandas.Series([root_y for i in range(num_samples)])
-data["Root_pz"] = butter_lowpass_filter(data["Hips_pz"], filter_cutoff, filter_fs, filter_order)
-
-#
-# compute rotation of root by filtering rotation of the hips
-#
-
-thetas = []
-z_axis = Hifi.math.Vec3(0, 0, 1)
-y_axis = Hifi.math.Vec3(0, 1, 0)
-for i in range(num_samples):
-    rot = Hifi.math.Quat(data["Hips_rx"][i], data["Hips_ry"][i], data["Hips_rz"][i], data["Hips_rw"][i])
-    forward = rot.rotate(z_axis)
-    new_theta = math.atan2(forward.x, forward.z)
-
-    if i > 0:
-        prev_theta = thetas[i - 1]
-    else:
-        prev_theta = math.atan2(forward.x, forward.z)
-
-    # shift theta so that it is less then 180 degrees from the previous theta
-    # this is to prevent discontinuities and keep rotations smooth.
-    while (new_theta - prev_theta) > math.pi:
-        new_theta = new_theta - (2.0 * math.pi)
-    while (new_theta - prev_theta) < -math.pi:
-        new_theta = new_theta + (2.0 * math.pi)
-    thetas.append(new_theta)
-
-filtered_thetas = butter_lowpass_filter(pandas.Series(thetas), filter_cutoff, filter_fs, filter_order)
-rot_quats = [Hifi.math.Quat.fromAngleAxis(theta, y_axis) for theta in filtered_thetas]
-
-data["Root_rx"] = pandas.Series([q.x for q in rot_quats])
-data["Root_ry"] = pandas.Series([q.y for q in rot_quats])
-data["Root_rz"] = pandas.Series([q.z for q in rot_quats])
-data["Root_rw"] = pandas.Series([q.w for q in rot_quats])
-POSE_NAMES.append("Root")
-
-nan_check(data)
-
-#
-# compute trajectories of root motion
-#
-
-num_trajectory_points = 4
-trajectory_frames = [18, 36, 62, 90]
-def timeShift(series, offset):
-    num_samples = len(series)
-    return [series[max(0, min(num_samples - 1, i + offset))] for i in range(num_samples)]
-
-# generate forward trajectories
-suffixes = ["_px", "_py", "_pz", "_rx", "_ry", "_rz", "_rw"]
-
-for i in range(num_trajectory_points):
-    for suffix in suffixes:
-        data["RootF{}{}".format(i + 1, suffix)] = timeShift(data["Root{}".format(suffix)], trajectory_frames[i])
-    POSE_NAMES.append("RootF{}".format(i + 1))
-
-#
-# Transform everything back into Root relative space
-#
+# which poses to render
+POSE_NAMES = ['Head', 'Hips', 'LeftFoot', 'RightFoot', 'LeftHand', 'RightHand', 'Root']
+POSE_NAMES = POSE_NAMES + ["RootTraj{}".format(i + 1) for i in range(num_trajectory_points)]
+# POSE_NAMES = POSE_NAMES + ["HeadTraj{}".format(i + 1) for i in range(num_trajectory_points)]
 
 if GENERATE_OUTPUT:
-    output_poses = ['Hips', 'LeftFoot', 'RightFoot', 'Head', 'LeftHand', 'RightHand']
-    for i in range(num_trajectory_points):
-        output_poses.append("RootF{}".format(i + 1))
 
-    for pose in output_poses:
-        print("transforming " + pose + " into Root relative space")
+    # load all stepping data and concatenate it together
+    # stepping1 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns1.json.gz", trajectory_frames)
+    # stepping2 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns2.json.gz", trajectory_frames)
+    # stepping3 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
+    # data = stepping1.append(stepping2, ignore_index = True).append(stepping3, ignore_index = True)
 
-        Hifi.recording.apply_xform_inverse(data, 1.0, 'Root_px', 'Root_py', 'Root_pz', 'Root_rx', 'Root_ry', 'Root_rz', 'Root_rw',
-                                           pose + '_px', pose + '_py', pose + '_pz', pose + '_rx', pose + '_ry', pose + '_rz', pose + '_rw')
+    # load stepping and micro steps
+    microsteps = Hifi.recording.prepare_data_for_motion_matching("motion-matching/microsteps-no-turns.json.gz", trajectory_frames)
+    stepping3 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
+    data = stepping3.append(microsteps, ignore_index = True)
+
+    # just load one recording.
+    # data = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
+
+    # reset all the frame numbers
+    data['id'] = pandas.Series(numpy.arange(len(data)))
 
     # keep only the keys we care about.
     output_keys = ['id', 'Hips_px', 'Hips_py', 'Hips_pz', 'Hips_rx', 'Hips_ry', 'Hips_rz', 'Hips_rw',
@@ -212,23 +54,21 @@ if GENERATE_OUTPUT:
                    'LeftHand_px', 'LeftHand_py', 'LeftHand_pz', 'LeftHand_rx', 'LeftHand_ry', 'LeftHand_rz', 'LeftHand_rw',
                    'RightHand_px', 'RightHand_py', 'RightHand_pz', 'RightHand_rx', 'RightHand_ry', 'RightHand_rz', 'RightHand_rw']
     for i in range(num_trajectory_points):
-        output_keys.append("RootF{}_px".format(i + 1))
-        output_keys.append("RootF{}_py".format(i + 1))
-        output_keys.append("RootF{}_pz".format(i + 1))
+        output_keys.append("RootTraj{}_px".format(i + 1))
+        output_keys.append("RootTraj{}_py".format(i + 1))
+        output_keys.append("RootTraj{}_pz".format(i + 1))
+    for i in range(num_trajectory_points):
+        output_keys.append("HeadTraj{}_px".format(i + 1))
+        output_keys.append("HeadTraj{}_py".format(i + 1))
+        output_keys.append("HeadTraj{}_pz".format(i + 1))
 
-    dump_data(output_keys, data)
+    Hifi.recording.output_data_for_motion_matching(output_keys, data)
 
-    # print c++ enum
-    print("enum RowIndices {")
-    for i in range(len(output_keys)):
-        key = output_keys[i]
-        if i == 0:
-            print("    {}_INDEX = 0,".format(key.upper()))
-        else:
-            print("    {}_INDEX,".format(key.upper()))
+else:
 
-    print("    DATA_ROW_SIZE")
-    print("};")
+    # "53_Matthew_Rockettes-Kick.gz"
+    data = Hifi.recording.prepare_data_for_visualization("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
+
 
 ##############################################
 
@@ -249,11 +89,11 @@ def drawPose(name, frame):
     TRAIL_LENGTH = 45
     TRAIL_COLOR = [0.0, 0.5, 0.5, 1.0]
 
-    pos = Hifi.math.Vec3(data[name + "_px"][frame], data[name + "_py"][frame], data[name + "_pz"][frame])
-    rot = Hifi.math.Quat(data[name + "_rx"][frame], data[name + "_ry"][frame], data[name + "_rz"][frame], data[name + "_rw"][frame])
-    xAxis = pos + rot.rotate(Hifi.math.Vec3(0.1, 0.0, 0.0))
-    yAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.1, 0.0))
-    zAxis = pos + rot.rotate(Hifi.math.Vec3(0.0, 0.0, 0.1))
+    pos = Hifi.vecmath.Vec3(data[name + "_px"][frame], data[name + "_py"][frame], data[name + "_pz"][frame])
+    rot = Hifi.vecmath.Quat(data[name + "_rx"][frame], data[name + "_ry"][frame], data[name + "_rz"][frame], data[name + "_rw"][frame])
+    xAxis = pos + rot.rotate(Hifi.vecmath.Vec3(0.1, 0.0, 0.0))
+    yAxis = pos + rot.rotate(Hifi.vecmath.Vec3(0.0, 0.1, 0.0))
+    zAxis = pos + rot.rotate(Hifi.vecmath.Vec3(0.0, 0.0, 0.1))
     gl.glBegin(gl.GL_LINES)
     gl.glColor4d(1.0, 0.0, 0.0, 1.0)
     gl.glVertex3d(pos.x, pos.y, pos.z)
@@ -270,7 +110,7 @@ def drawPose(name, frame):
         for i in range(TRAIL_LENGTH):
             frameIndex = max(frame - i, 0)
             shade = ((TRAIL_LENGTH - i) / TRAIL_LENGTH)
-            pos = Hifi.math.Vec3(data[name + "_px"][frameIndex], data[name + "_py"][frameIndex], data[name + "_pz"][frameIndex])
+            pos = Hifi.vecmath.Vec3(data[name + "_px"][frameIndex], data[name + "_py"][frameIndex], data[name + "_pz"][frameIndex])
             gl.glColor4d(TRAIL_COLOR[0] * shade, TRAIL_COLOR[1] * shade, TRAIL_COLOR[2] * shade, TRAIL_COLOR[3])
             gl.glVertex3d(pos.x, pos.y, pos.z)
         gl.glEnd()
