@@ -17,7 +17,7 @@ import Hifi.vecmath
 ##############################################
 ## paste jupyter notebook here
 
-GENERATE_OUTPUT = False
+GENERATE_OUTPUT = True
 
 trajectory_frames = [18, 36, 62, 90, -18, -36, -62, -90]
 num_trajectory_points = len(trajectory_frames)
@@ -30,15 +30,16 @@ POSE_NAMES = POSE_NAMES + ["RootTraj{}".format(i + 1) for i in range(num_traject
 if GENERATE_OUTPUT:
 
     # load all stepping data and concatenate it together
-    # stepping1 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns1.json.gz", trajectory_frames)
-    # stepping2 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns2.json.gz", trajectory_frames)
-    # stepping3 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
-    # data = stepping1.append(stepping2, ignore_index = True).append(stepping3, ignore_index = True)
+    microsteps = Hifi.recording.prepare_data_for_motion_matching("motion-matching/microsteps-no-turns.json.gz", trajectory_frames)
+    stepping1 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns1.json.gz", trajectory_frames)
+    stepping2 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns2.json.gz", trajectory_frames)
+    stepping3 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
+    data = microsteps.append(stepping1.append(stepping2, ignore_index = True).append(stepping3, ignore_index = True), ignore_index = True)
 
     # load stepping and micro steps
-    microsteps = Hifi.recording.prepare_data_for_motion_matching("motion-matching/microsteps-no-turns.json.gz", trajectory_frames)
-    stepping3 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
-    data = stepping3.append(microsteps, ignore_index = True)
+    # microsteps = Hifi.recording.prepare_data_for_motion_matching("motion-matching/microsteps-no-turns.json.gz", trajectory_frames)
+    # stepping3 = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
+    # data = stepping3.append(microsteps, ignore_index = True)
 
     # just load one recording.
     # data = Hifi.recording.prepare_data_for_motion_matching("motion-matching/matthew-stepping-no-turns3.json.gz", trajectory_frames)
